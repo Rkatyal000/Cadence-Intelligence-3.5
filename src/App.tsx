@@ -43,6 +43,11 @@ export default function App() {
       try {
         const res = await fetch("/api/health");
         if (res.ok) {
+          const contentType = res.headers.get("content-type");
+          if (!contentType || !contentType.includes("application/json")) {
+            setEngineStatus("local");
+            return;
+          }
           const data = await res.json();
           if (data.rateLimited) {
             setEngineStatus("local");

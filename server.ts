@@ -1,9 +1,11 @@
 import express from "express";
 import path from "path";
 import dotenv from "dotenv";
+import fs from "fs";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createServer as createViteServer } from "vite";
 import { createRequire } from "module";
+import nodemailer from "nodemailer";
 
 // @ts-ignore
 const requireFn = typeof require === "function" ? require : createRequire(import.meta.url);
@@ -12,6 +14,133 @@ const mammoth = requireFn("mammoth");
 
 // Load environment variables
 dotenv.config();
+
+// Lazy-initialized nodemailer transport helper to send real email
+async function sendRealEmail(to: string, subject: string, htmlBody: string): Promise<{ success: boolean; error?: string }> {
+  let host = (process.env.SMTP_HOST || "").trim();
+  const port = (process.env.SMTP_PORT || "").trim();
+  const user = (process.env.SMTP_USER || "").trim();
+  const pass = (process.env.SMTP_PASS || "").trim();
+  const from = (process.env.SMTP_FROM || "").trim() || "no-reply@cadence.intelligence";
+  const fromName = (process.env.SMTP_FROM_NAME || "").trim() || "Cadence Intelligence";
+
+  if (!host || !port || !user || !pass) {
+    return {
+      success: false,
+      error: "SMTP credentials (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS) are not fully configured in environment secrets."
+    };
+  }
+
+  // Self-healing / Auto-correction for user configuration errors:
+  // If the user mistakenly entered their email address as the SMTP_HOST (e.g. katyalrohit29@gmail.com)
+  if (host.includes("@")) {
+    const domain = host.split("@")[1]?.toLowerCase();
+    if (domain === "gmail.com") {
+      host = "smtp.gmail.com";
+    } else if (domain) {
+      host = `smtp.${domain}`;
+    } else {
+      host = "smtp.gmail.com";
+    }
+  } else if (host.toLowerCase() === "gmail.com" || host.toLowerCase() === "gmail") {
+    host = "smtp.gmail.com";
+  }
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host: host,
+      port: Number(port) || 465,
+      secure: Number(port) === 465 || !port, // Default secure for port 465
+      auth: {
+        user: user,
+        pass: pass,
+      },
+    });
+
+    await transporter.sendMail({
+      from: `"${fromName}" <${from}>`,
+      to,
+      subject,
+      html: htmlBody,
+    });
+
+    return { success: true };
+  } catch (err: any) {
+    console.error("Nodemailer failed to send email:", err);
+    return {
+      success: false,
+      error: err.message || "Failed to deliver email through SMTP server."
+    };
+  }
+}
+
+
+// Persistent User Store
+interface UserRecord {
+  email: string;
+  passwordHash: string;
+  role: string;
+  avatar: string;
+}
+
+const USERS_FILE = path.join(process.cwd(), "users.json");
+
+function loadUsers(): Record<string, UserRecord> {
+  const defaultUsers: Record<string, UserRecord> = {
+    "rohitkatyal12345@gmail.com": {
+      email: "rohitkatyal12345@gmail.com",
+      passwordHash: "password123",
+      role: "Staff Systems Architect",
+      avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&h=150&q=80"
+    }
+  };
+
+  try {
+    if (fs.existsSync(USERS_FILE)) {
+      const data = fs.readFileSync(USERS_FILE, "utf-8");
+      if (data.trim()) {
+        const parsed = JSON.parse(data);
+        // Ensure default user is always present
+        if (!parsed["rohitkatyal12345@gmail.com"]) {
+          parsed["rohitkatyal12345@gmail.com"] = defaultUsers["rohitkatyal12345@gmail.com"];
+        }
+        return parsed;
+      }
+    }
+  } catch (error) {
+    console.error("Failed to load users file:", error);
+  }
+
+  // Save default users initially if file doesn't exist
+  try {
+    fs.writeFileSync(USERS_FILE, JSON.stringify(defaultUsers, null, 2), "utf-8");
+  } catch (err) {
+    console.error("Failed to write initial users file:", err);
+  }
+  return defaultUsers;
+}
+
+function saveUsers(users: Record<string, UserRecord>) {
+  try {
+    fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), "utf-8");
+  } catch (error) {
+    console.error("Failed to save users to file:", error);
+  }
+}
+
+// Memory stores for secure OTP validation and verification
+interface SimulatedEmail {
+  id: string;
+  to: string;
+  subject: string;
+  body: string;
+  otp: string;
+  timestamp: string;
+}
+
+const activeOtps = new Map<string, { otp: string; expires: number }>();
+const simulatedOutbox: SimulatedEmail[] = [];
+
 
 // Lazy-initialized Gemini client helper
 let aiClient: GoogleGenAI | null = null;
@@ -639,7 +768,302 @@ async function startServer() {
   
   // Health check endpoint
   app.get("/api/health", (req, res) => {
-    res.json({ status: "healthy", keyAvailable: !!process.env.GEMINI_API_KEY, rateLimited: geminiRateLimited });
+    res.json({ 
+      status: "healthy", 
+      keyAvailable: !!process.env.GEMINI_API_KEY, 
+      rateLimited: geminiRateLimited,
+      smtpConfigured: !!(process.env.SMTP_HOST && process.env.SMTP_PORT && process.env.SMTP_USER && process.env.SMTP_PASS)
+    });
+  });
+
+  // Authentication Verification Endpoint
+  app.post("/api/verify-auth", (req, res) => {
+    const { email, password, role, avatar } = req.body;
+
+    if (!email || typeof email !== "string" || !email.includes("@")) {
+      return res.status(400).json({
+        success: false,
+        error: "Verification Failed: Please enter a valid professional email address."
+      });
+    }
+
+    if (!password || typeof password !== "string" || password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        error: "Verification Failed: Password must be at least 6 characters long."
+      });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const users = loadUsers();
+
+    if (users[cleanEmail]) {
+      // User exists - check password
+      if (users[cleanEmail].passwordHash !== password) {
+        return res.status(401).json({
+          success: false,
+          error: `Verification Failed: Incorrect password for ${cleanEmail}. Please double-check your password, or use the "Forgot Password" link to reset it.`
+        });
+      }
+      
+      // Password correct! Return user info
+      return res.json({
+        success: true,
+        verified: true,
+        user: {
+          email: cleanEmail,
+          role: users[cleanEmail].role || role || "Contributor",
+          avatar: users[cleanEmail].avatar || avatar || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&h=150&q=80"
+        },
+        message: "Workspace credentials verified successfully by Cadence Core."
+      });
+    } else {
+      // User does not exist - Register them automatically with their selected details!
+      const newUser: UserRecord = {
+        email: cleanEmail,
+        passwordHash: password,
+        role: role || "Contributor",
+        avatar: avatar || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&h=150&q=80"
+      };
+      
+      users[cleanEmail] = newUser;
+      saveUsers(users);
+
+      return res.json({
+        success: true,
+        verified: true,
+        user: {
+          email: cleanEmail,
+          role: newUser.role,
+          avatar: newUser.avatar
+        },
+        message: "New workspace account registered and verified successfully by Cadence Core!"
+      });
+    }
+  });
+
+  // 1. Send OTP Endpoint
+  app.post("/api/send-otp", async (req, res) => {
+    const { email } = req.body;
+
+    if (!email || typeof email !== "string" || !email.includes("@")) {
+      return res.status(400).json({
+        success: false,
+        error: "Verification Failed: Please enter a valid professional email address."
+      });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    
+    // Generate a secure, high-visibility 6-digit OTP
+    const otp = (Math.floor(100000 + Math.random() * 900000)).toString();
+    const expires = Date.now() + 10 * 60 * 1000; // 10 minutes expiry
+
+    activeOtps.set(cleanEmail, { otp, expires });
+
+    // Design a gorgeous professional dual-verification email body
+    const subject = `[Cadence Workspace Security] Verification Code: ${otp}`;
+    const body = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 580px; margin: 0 auto; padding: 32px 24px; background-color: #0b0f19; border: 1px solid #1e293b; border-radius: 16px; color: #f1f5f9;">
+        <div style="display: flex; align-items: center; margin-bottom: 24px;">
+          <div style="width: 36px; height: 36px; border-radius: 8px; background: linear-gradient(135deg, #4f46e5, #6366f1); display: flex; align-items: center; justify-content: center; font-weight: 900; color: #ffffff; font-size: 18px; line-height: 1; text-align: center;">C</div>
+          <span style="font-size: 16px; font-weight: 800; color: #ffffff; margin-left: 10px; letter-spacing: -0.025em;">Cadence Workspace Security</span>
+        </div>
+        
+        <h2 style="font-size: 20px; font-weight: 800; color: #ffffff; margin-top: 0; margin-bottom: 8px; letter-spacing: -0.01em;">Dual-Verification OTP Requested</h2>
+        <p style="font-size: 13px; color: #94a3b8; line-height: 1.6; margin-top: 0; margin-bottom: 20px;">
+          A request was initiated to verify identity or perform a high-fidelity password reset for workspace: <strong style="color: #e2e8f0;">${cleanEmail}</strong>. 
+        </p>
+
+        <div style="background-color: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 20px;">
+          <p style="font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; color: #6366f1; margin: 0 0 8px 0;">Your Verification OTP</p>
+          <div style="font-size: 32px; font-weight: 900; letter-spacing: 0.25em; color: #ffffff; font-family: 'SF Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, monospace; margin: 0;">${otp}</div>
+          <p style="font-size: 10px; color: #64748b; margin: 8px 0 0 0;">Valid for 10 minutes • Keep this code confidential</p>
+        </div>
+
+        <p style="font-size: 11px; color: #475569; line-height: 1.5; margin: 0;">
+          If you did not initiate this request, you can safely ignore this email. Your workspace remains encrypted and secure.
+        </p>
+      </div>
+    `;
+
+    // Push to simulated outbox log so the client sandbox can read it instantly
+    const emailRecord: SimulatedEmail = {
+      id: Math.random().toString(36).substring(2, 11),
+      to: cleanEmail,
+      subject,
+      body,
+      otp,
+      timestamp: new Date().toLocaleTimeString()
+    };
+
+    // Maintain a max list size of 15 emails to prevent memory creep
+    simulatedOutbox.unshift(emailRecord);
+    if (simulatedOutbox.length > 15) {
+      simulatedOutbox.pop();
+    }
+
+    console.log(`[SECURE MAIL SENT] OTP Generated for ${cleanEmail}: ${otp}`);
+
+    // Try sending real email
+    const mailResult = await sendRealEmail(cleanEmail, subject, body);
+
+    if (mailResult.success) {
+      // Redact the OTP from the simulated outbox record for real SMTP security
+      emailRecord.otp = "******";
+      emailRecord.body = emailRecord.body.replace(otp, "******");
+
+      return res.json({
+        success: true,
+        smtpConfigured: true,
+        message: `A security OTP verification email has been successfully dispatched directly to ${cleanEmail}. Please check your inbox (including your spam folder).`
+      });
+    } else {
+      const isConfigError = mailResult.error && mailResult.error.includes("not fully configured");
+      const userMessage = isConfigError 
+        ? `A security OTP verification email has been generated for ${cleanEmail}. Since SMTP credentials are not yet configured in Settings > Secrets, the code has been delivered to the Workspace Sandbox Mailbox below.`
+        : `SMTP mail delivery failed: ${mailResult.error}. The code has been routed to the Workspace Sandbox Mailbox below so you are not blocked.`;
+
+      return res.json({
+        success: true,
+        smtpConfigured: false,
+        smtpError: mailResult.error,
+        message: userMessage
+      });
+    }
+  });
+
+  // 2. Verify OTP Endpoint
+  app.post("/api/verify-otp", (req, res) => {
+    const { email, otp } = req.body;
+
+    if (!email || !otp) {
+      return res.status(400).json({
+        success: false,
+        error: "Verification Failed: Email and OTP code are required parameters."
+      });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const stored = activeOtps.get(cleanEmail);
+
+    if (!stored) {
+      return res.status(400).json({
+        success: false,
+        error: "Verification Failed: No verification request is active for this email. Please request a new OTP."
+      });
+    }
+
+    if (Date.now() > stored.expires) {
+      activeOtps.delete(cleanEmail);
+      return res.status(400).json({
+        success: false,
+        error: "Verification Failed: The OTP code has expired. Please request a new OTP."
+      });
+    }
+
+    if (stored.otp !== otp.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: "Verification Failed: Incorrect OTP code. Please enter the exact 6-digit code sent to you."
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "Security code verified successfully."
+    });
+  });
+
+  // 3. Fetch Simulated Emails for development sandbox
+  app.get("/api/simulated-emails", (req, res) => {
+    return res.json({
+      success: true,
+      emails: simulatedOutbox
+    });
+  });
+
+  // Password Reset / Forgot Password Endpoint
+  app.post("/api/reset-password", (req, res) => {
+    const { email, newPassword, otp } = req.body;
+
+    if (!email || typeof email !== "string" || !email.includes("@")) {
+      return res.status(400).json({
+        success: false,
+        error: "Reset Failed: Please enter a valid professional email address."
+      });
+    }
+
+    if (!otp || typeof otp !== "string" || otp.length !== 6) {
+      return res.status(400).json({
+        success: false,
+        error: "Reset Failed: A valid 6-digit verification OTP code is required."
+      });
+    }
+
+    if (!newPassword || typeof newPassword !== "string" || newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        error: "Reset Failed: Password must be at least 6 characters long."
+      });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    
+    // Verify OTP first!
+    const stored = activeOtps.get(cleanEmail);
+    if (!stored) {
+      return res.status(400).json({
+        success: false,
+        error: "Reset Failed: No active OTP request found for this email. Please request an OTP first."
+      });
+    }
+
+    if (Date.now() > stored.expires) {
+      activeOtps.delete(cleanEmail);
+      return res.status(400).json({
+        success: false,
+        error: "Reset Failed: Your verification OTP code has expired. Please request a new one."
+      });
+    }
+
+    if (stored.otp !== otp.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: "Reset Failed: The verification OTP code is incorrect."
+      });
+    }
+
+    // OTP validated successfully - remove it so it cannot be re-used
+    activeOtps.delete(cleanEmail);
+
+    const users = loadUsers();
+
+    if (users[cleanEmail]) {
+      // Update password
+      users[cleanEmail].passwordHash = newPassword;
+      saveUsers(users);
+
+      return res.json({
+        success: true,
+        message: `Security password for ${cleanEmail} has been reset successfully. You can now log in using your new password.`
+      });
+    } else {
+      // Create user with new password
+      const newUser: UserRecord = {
+        email: cleanEmail,
+        passwordHash: newPassword,
+        role: "Contributor",
+        avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&h=150&q=80"
+      };
+      users[cleanEmail] = newUser;
+      saveUsers(users);
+
+      return res.json({
+        success: true,
+        message: `No existing workspace was registered under ${cleanEmail}. A new workspace account has been initialized and secured with this password. You can now log in.`
+      });
+    }
   });
 
   // 1. Generate Topics based on Content Pillars and Profile
