@@ -1,0 +1,198 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;750;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@variant dark (&:where(.dark, .dark *));
+
+/* Smooth transition for theme toggle */
+html, body {
+  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+}
+
+/* Custom global dark mode overrides for deep-dive writing sessions */
+.dark body {
+  background-color: #0b0f19 !important; /* Deep space black/blue background */
+  color: #f1f5f9 !important;
+}
+
+.dark .min-h-screen {
+  background-color: #0b0f19 !important;
+}
+
+/* Map standard Tailwind light utility classes to elegant dark variants */
+.dark .bg-slate-50,
+.dark .bg-slate-100/50,
+.dark .bg-slate-50/50,
+.dark main {
+  background-color: #0b0f19 !important;
+}
+
+.dark .bg-white {
+  background-color: #0f172a !important; /* Slate 900 panel */
+}
+
+.dark .bg-white\/85 {
+  background-color: rgba(15, 23, 42, 0.85) !important;
+  backdrop-filter: blur(12px) !important;
+}
+
+.dark .bg-slate-100 {
+  background-color: #1e293b !important; /* Slate 800 */
+}
+
+.dark .bg-slate-100\/80 {
+  background-color: rgba(30, 41, 59, 0.8) !important;
+}
+
+.dark .bg-slate-100\/50 {
+  background-color: rgba(30, 41, 59, 0.5) !important;
+}
+
+/* Card and container borders */
+.dark .border-slate-200,
+.dark .border-slate-150,
+.dark .border-slate-100,
+.dark .border-slate-200\/60,
+.dark .border-slate-200\/40,
+.dark .border-slate-200\/80,
+.dark .border-slate-100\/30,
+.dark border {
+  border-color: #1e293b !important; /* Slate 800 border */
+}
+
+.dark .shadow-sm {
+  shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.5) !important;
+}
+
+/* Text elements */
+.dark .text-slate-900,
+.dark .text-slate-855,
+.dark .text-slate-800 {
+  color: #f8fafc !important; /* Slate 50 */
+}
+
+.dark .text-slate-750,
+.dark .text-slate-700,
+.dark .text-slate-650,
+.dark .text-slate-600 {
+  color: #cbd5e1 !important; /* Slate 300 */
+}
+
+.dark .text-slate-500 {
+  color: #94a3b8 !important; /* Slate 400 */
+}
+
+.dark .text-slate-400 {
+  color: #64748b !important; /* Slate 500 */
+}
+
+/* Input, Textareas and Dropdowns */
+.dark input,
+.dark textarea,
+.dark select {
+  background-color: #1e293b !important;
+  color: #f8fafc !important;
+  border-color: #334155 !important;
+}
+
+.dark input:focus,
+.dark textarea:focus,
+.dark select:focus {
+  border-color: #6366f1 !important; /* Indigo accent */
+  outline: none;
+}
+
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: #64748b !important;
+}
+
+/* Custom tab controls and active state adjustments */
+.dark .bg-slate-900 {
+  background-color: #38bdf8 !important; /* Sky 400 */
+  color: #0f172a !important;
+}
+
+/* Active tab buttons in header and modals */
+.dark button.bg-slate-900 {
+  background-color: #f8fafc !important; /* Slate 50 active */
+  color: #0f172a !important;
+}
+
+.dark button.text-slate-500:hover {
+  color: #f1f5f9 !important;
+}
+
+/* Scrollbar customizations for late night mode */
+.dark ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.dark ::-webkit-scrollbar-track {
+  background: #0b0f19;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 4px;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+/* Specific component elements mappings */
+.dark .bg-emerald-50 {
+  background-color: #064e3b !important;
+  color: #a7f3d0 !important;
+}
+
+.dark .border-emerald-100 {
+  border-color: #065f46 !important;
+}
+
+.dark .text-emerald-700 {
+  color: #34d399 !important;
+}
+
+.dark .bg-indigo-50 {
+  background-color: #1e1b4b !important;
+  color: #c7d2fe !important;
+}
+
+.dark .border-indigo-100 {
+  border-color: #312e81 !important;
+}
+
+.dark .text-indigo-700 {
+  color: #818cf8 !important;
+}
+
+.dark .bg-amber-50 {
+  background-color: #451a03 !important;
+  color: #fde68a !important;
+}
+
+.dark .border-amber-100 {
+  border-color: #78350f !important;
+}
+
+.dark .text-amber-700 {
+  color: #fbbf24 !important;
+}
+
+/* Modal styling */
+.dark #reset-modal-card {
+  background-color: #0f172a !important;
+  border-color: #1e293b !important;
+}
+
+/* Custom analytics lists & reports mapping */
+.dark .divide-slate-100 > * + * {
+  border-color: #1e293b !important;
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Cadence",
+  "description": "Your AI-assisted LinkedIn writing system to research topics, generate hooks, and draft posts in your authentic voice.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
