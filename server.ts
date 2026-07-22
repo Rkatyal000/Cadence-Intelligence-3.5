@@ -818,28 +818,60 @@ async function startServer() {
         message: "Workspace credentials verified successfully by Cadence Core."
       });
     } else {
-      // User does not exist - Register them automatically with their selected details!
-      const newUser: UserRecord = {
-        email: cleanEmail,
-        passwordHash: password,
-        role: role || "Contributor",
-        avatar: avatar || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&h=150&q=80"
-      };
-      
-      users[cleanEmail] = newUser;
-      saveUsers(users);
-
-      return res.json({
-        success: true,
-        verified: true,
-        user: {
-          email: cleanEmail,
-          role: newUser.role,
-          avatar: newUser.avatar
-        },
-        message: "New workspace account registered and verified successfully by Cadence Core!"
+      return res.status(404).json({
+        success: false,
+        error: "Account not found. Please switch to the Sign Up tab to register a new workspace."
       });
     }
+  });
+
+  // Dedicated Sign Up Endpoint
+  app.post("/api/signup", (req, res) => {
+    const { email, password, role, avatar } = req.body;
+
+    if (!email || typeof email !== "string" || !email.includes("@")) {
+      return res.status(400).json({
+        success: false,
+        error: "Registration Failed: Please enter a valid professional email address."
+      });
+    }
+
+    if (!password || typeof password !== "string" || password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        error: "Registration Failed: Password must be at least 6 characters long."
+      });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const users = loadUsers();
+
+    if (users[cleanEmail]) {
+      return res.status(400).json({
+        success: false,
+        error: "Registration Failed: An account with this email already exists. Please Sign In instead."
+      });
+    }
+
+    const newUser: UserRecord = {
+      email: cleanEmail,
+      passwordHash: password,
+      role: role || "Contributor",
+      avatar: avatar || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&h=150&q=80"
+    };
+
+    users[cleanEmail] = newUser;
+    saveUsers(users);
+
+    return res.json({
+      success: true,
+      user: {
+        email: cleanEmail,
+        role: newUser.role,
+        avatar: newUser.avatar
+      },
+      message: "Workspace account created and stored successfully!"
+    });
   });
 
   // 1. Send OTP Endpoint

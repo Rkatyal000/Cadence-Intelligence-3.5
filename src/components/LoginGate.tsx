@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Mail, Lock, Eye, EyeOff, Sparkles, LogIn, ShieldAlert, ArrowRight, CheckCircle2, ArrowLeft, KeyRound, Info, Inbox, RefreshCw, Send } from "lucide-react";
+import { Mail, Lock, Eye, EyeOff, Sparkles, LogIn, ShieldAlert, ArrowRight, CheckCircle2, ArrowLeft, KeyRound, Info, Inbox, RefreshCw, Send, UserPlus } from "lucide-react";
 
 interface LoginGateProps {
   onLoginSuccess: (email: string, role: string, avatar: string) => void;
@@ -13,6 +13,7 @@ export default function LoginGate({ onLoginSuccess }: LoginGateProps) {
   const [selectedAvatar, setSelectedAvatar] = useState("https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&h=150&q=80");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSignUpMode, setIsSignUpMode] = useState(false);
 
   // Password reset specific states
   const [isResetMode, setIsResetMode] = useState(false);
@@ -44,7 +45,7 @@ export default function LoginGate({ onLoginSuccess }: LoginGateProps) {
         setSimulatedEmails(data.emails || []);
       }
     } catch (err) {
-      console.error("Error fetching simulated emails:", err);
+      console.warn("Error fetching simulated emails:", err);
     }
   };
 
@@ -61,7 +62,7 @@ export default function LoginGate({ onLoginSuccess }: LoginGateProps) {
         setSmtpConfigured(!!data.smtpConfigured);
       }
     } catch (err) {
-      console.error("Error checking SMTP configuration status:", err);
+      console.warn("Error checking SMTP configuration status:", err);
     }
   };
 
@@ -117,7 +118,8 @@ export default function LoginGate({ onLoginSuccess }: LoginGateProps) {
     setIsSubmitting(true);
     
     try {
-      const response = await fetch("/api/verify-auth", {
+      const endpoint = isSignUpMode ? "/api/signup" : "/api/verify-auth";
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -134,7 +136,7 @@ export default function LoginGate({ onLoginSuccess }: LoginGateProps) {
       if (response.ok && data.success) {
         onLoginSuccess(data.user.email, data.user.role, data.user.avatar);
       } else {
-        setError(data.error || "Verification failed: Invalid credentials.");
+        setError(data.error || "Authentication failed: Invalid credentials.");
       }
     } catch (err) {
       setIsSubmitting(false);
@@ -499,10 +501,43 @@ export default function LoginGate({ onLoginSuccess }: LoginGateProps) {
                 </form>
               )
             ) : (
-              /* Standard Login Form */
-              <form onSubmit={handleSubmit} className="space-y-4">
-                
-                {/* Email input */}
+              /* Standard Login / Signup Form */
+              <div className="space-y-4">
+                {/* Tabs to switch between Sign In and Sign Up */}
+                <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-900/60 border border-slate-800 rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsSignUpMode(false);
+                      setError(null);
+                    }}
+                    className={`py-2.5 text-[10px] font-black uppercase tracking-wider rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                      !isSignUpMode
+                        ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    <LogIn className="w-3.5 h-3.5" /> Sign In
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsSignUpMode(true);
+                      setError(null);
+                    }}
+                    className={`py-2.5 text-[10px] font-black uppercase tracking-wider rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                      isSignUpMode
+                        ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    <UserPlus className="w-3.5 h-3.5" /> Sign Up
+                  </button>
+                </div>
+
+                <form onSubmit={handleSubmit} className="space-y-4">
+                  
+                  {/* Email input */}
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">Professional Email</label>
                   <div className="relative">
@@ -564,77 +599,81 @@ export default function LoginGate({ onLoginSuccess }: LoginGateProps) {
                 </div>
 
                 {/* Persona selector with datalist for searching and custom typing */}
-                <div className="space-y-1.5 pt-1">
-                  <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">Target Career Focus</label>
-                  <div className="relative">
-                    <input
-                      id="target-career-focus-input"
-                      type="text"
-                      list="career-options"
-                      placeholder="Type or select a role (e.g. Senior Software Architect)"
-                      value={selectedRole}
-                      onChange={(e) => setSelectedRole(e.target.value)}
-                      className="w-full px-3.5 py-3 bg-slate-900/60 border border-slate-800 rounded-xl text-xs font-semibold text-white placeholder:text-slate-650 focus:outline-none focus:border-indigo-500 focus:bg-slate-900 focus:ring-1 focus:ring-indigo-500 transition-all"
-                    />
-                    <datalist id="career-options">
-                      <option value="Staff Systems Architect" />
-                      <option value="Senior Systems Engineer" />
-                      <option value="Principal Software Engineer" />
-                      <option value="Senior Engineering Manager" />
-                      <option value="VP of Engineering" />
-                      <option value="Chief Technology Officer (CTO)" />
-                      <option value="Director of Engineering" />
-                      <option value="Lead Full-Stack Developer" />
-                      <option value="Frontend Tech Lead" />
-                      <option value="Backend Developer" />
-                      <option value="AI / Machine Learning Researcher" />
-                      <option value="Data Science Lead" />
-                      <option value="Cloud Solutions Consultant" />
-                      <option value="Site Reliability Engineer (SRE)" />
-                      <option value="DevOps Specialist" />
-                      <option value="Principal Product Designer" />
-                      <option value="Senior UX/UI Designer" />
-                      <option value="Lead Product Manager" />
-                      <option value="Technical Product Owner" />
-                      <option value="Developer Relations Engineer" />
-                      <option value="Information Security Architect" />
-                      <option value="QA Automation Lead" />
-                      <option value="Scrum Master / Agile Delivery" />
-                      <option value="Mobile App Architect" />
-                    </datalist>
-                  </div>
-                  <p className="text-[9px] text-slate-500 font-medium">Type any custom role above or choose from the suggested professional roles list.</p>
-                </div>
+                {isSignUpMode && (
+                  <>
+                    <div className="space-y-1.5 pt-1 animate-fadeIn">
+                      <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">Target Career Focus</label>
+                      <div className="relative">
+                        <input
+                          id="target-career-focus-input"
+                          type="text"
+                          list="career-options"
+                          placeholder="Type or select a role (e.g. Senior Software Architect)"
+                          value={selectedRole}
+                          onChange={(e) => setSelectedRole(e.target.value)}
+                          className="w-full px-3.5 py-3 bg-slate-900/60 border border-slate-800 rounded-xl text-xs font-semibold text-white placeholder:text-slate-650 focus:outline-none focus:border-indigo-500 focus:bg-slate-900 focus:ring-1 focus:ring-indigo-500 transition-all"
+                        />
+                        <datalist id="career-options">
+                          <option value="Staff Systems Architect" />
+                          <option value="Senior Systems Engineer" />
+                          <option value="Principal Software Engineer" />
+                          <option value="Senior Engineering Manager" />
+                          <option value="VP of Engineering" />
+                          <option value="Chief Technology Officer (CTO)" />
+                          <option value="Director of Engineering" />
+                          <option value="Lead Full-Stack Developer" />
+                          <option value="Frontend Tech Lead" />
+                          <option value="Backend Developer" />
+                          <option value="AI / Machine Learning Researcher" />
+                          <option value="Data Science Lead" />
+                          <option value="Cloud Solutions Consultant" />
+                          <option value="Site Reliability Engineer (SRE)" />
+                          <option value="DevOps Specialist" />
+                          <option value="Principal Product Designer" />
+                          <option value="Senior UX/UI Designer" />
+                          <option value="Lead Product Manager" />
+                          <option value="Technical Product Owner" />
+                          <option value="Developer Relations Engineer" />
+                          <option value="Information Security Architect" />
+                          <option value="QA Automation Lead" />
+                          <option value="Scrum Master / Agile Delivery" />
+                          <option value="Mobile App Architect" />
+                        </datalist>
+                      </div>
+                      <p className="text-[9px] text-slate-500 font-medium">Type any custom role above or choose from the suggested professional roles list.</p>
+                    </div>
 
-                {/* Avatar selector */}
-                <div className="space-y-2 pt-1">
-                  <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">Choose Brand Avatar</label>
-                  <div className="grid grid-cols-4 gap-2">
-                    {avatars.map((av) => (
-                      <button
-                        key={av.id}
-                        type="button"
-                        onClick={() => {
-                          setSelectedAvatar(av.url);
-                          if (av.id === "male-1") setSelectedRole("Staff Systems Architect");
-                          if (av.id === "female-2") setSelectedRole("Principal Product Designer");
-                          if (av.id === "male-2") setSelectedRole("VP of Engineering");
-                        }}
-                        className={`relative rounded-xl overflow-hidden aspect-square border-2 transition-all p-0.5 ${
-                          selectedAvatar === av.url ? "border-indigo-500 scale-105 shadow-md shadow-indigo-500/20" : "border-transparent opacity-60 hover:opacity-100"
-                        }`}
-                        title={av.label}
-                      >
-                        <img src={av.url} alt={av.label} className="w-full h-full object-cover rounded-lg" referrerPolicy="no-referrer" />
-                        {selectedAvatar === av.url && (
-                          <div className="absolute top-1 right-1 bg-indigo-500 text-white rounded-full p-0.5">
-                            <CheckCircle2 className="w-2.5 h-2.5 stroke-[3]" />
-                          </div>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                    {/* Avatar selector */}
+                    <div className="space-y-2 pt-1 animate-fadeIn">
+                      <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">Choose Brand Avatar</label>
+                      <div className="grid grid-cols-4 gap-2">
+                        {avatars.map((av) => (
+                          <button
+                            key={av.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedAvatar(av.url);
+                              if (av.id === "male-1") setSelectedRole("Staff Systems Architect");
+                              if (av.id === "female-2") setSelectedRole("Principal Product Designer");
+                              if (av.id === "male-2") setSelectedRole("VP of Engineering");
+                            }}
+                            className={`relative rounded-xl overflow-hidden aspect-square border-2 transition-all p-0.5 ${
+                              selectedAvatar === av.url ? "border-indigo-500 scale-105 shadow-md shadow-indigo-500/20" : "border-transparent opacity-60 hover:opacity-100"
+                            }`}
+                            title={av.label}
+                          >
+                            <img src={av.url} alt={av.label} className="w-full h-full object-cover rounded-lg" referrerPolicy="no-referrer" />
+                            {selectedAvatar === av.url && (
+                              <div className="absolute top-1 right-1 bg-indigo-500 text-white rounded-full p-0.5">
+                                <CheckCircle2 className="w-2.5 h-2.5 stroke-[3]" />
+                              </div>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
 
                 {/* Errors display */}
                 {error && (
@@ -654,27 +693,31 @@ export default function LoginGate({ onLoginSuccess }: LoginGateProps) {
                     {isSubmitting ? (
                       <>
                         <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                        Authenticating Workspace...
+                        {isSignUpMode ? "Creating Account..." : "Authenticating Workspace..."}
                       </>
                     ) : (
                       <>
-                        <LogIn className="w-3.5 h-3.5" /> Enter Workspace
+                        {isSignUpMode ? <UserPlus className="w-3.5 h-3.5" /> : <LogIn className="w-3.5 h-3.5" />}
+                        {isSignUpMode ? "Register & Create Account" : "Enter Workspace"}
                       </>
                     )}
                   </button>
 
-                  <button
-                    type="button"
-                    onClick={handleQuickFill}
-                    className="w-full py-2 bg-slate-900/40 hover:bg-slate-900 hover:text-white text-slate-400 font-bold text-[10px] rounded-xl transition-all border border-slate-800/80 flex items-center justify-center gap-1.5"
-                  >
-                    <Sparkles className="w-3 h-3 text-indigo-400" />
-                    Auto-Fill Reviewer Account
-                  </button>
+                  {!isSignUpMode && (
+                    <button
+                      type="button"
+                      onClick={handleQuickFill}
+                      className="w-full py-2 bg-slate-900/40 hover:bg-slate-900 hover:text-white text-slate-400 font-bold text-[10px] rounded-xl transition-all border border-slate-800/80 flex items-center justify-center gap-1.5"
+                    >
+                      <Sparkles className="w-3 h-3 text-indigo-400" />
+                      Auto-Fill Reviewer Account
+                    </button>
+                  )}
                 </div>
 
               </form>
-            )}
+            </div>
+          )}
 
           </div>
 
