@@ -758,13 +758,10 @@ function getFallbackProfileAudit(profileUrl: string) {
 
 export const app = express();
 
-async function startServer() {
-  const PORT = 3000;
+// Use JSON body parser with comfortable limit for writing samples
+app.use(express.json({ limit: "5mb" }));
 
-  // Use JSON body parser with comfortable limit for writing samples
-  app.use(express.json({ limit: "5mb" }));
-
-  // API endpoints
+// API endpoints
   
   // Health check endpoint
   app.get("/api/health", (req, res) => {
@@ -1947,26 +1944,28 @@ Do not include any wrapping markdown markdown code-blocks like \`\`\`json. Retur
   });
 
   // Serve static files / Vite middleware
-  if (process.env.NODE_ENV !== "production") {
-    const { createServer: createViteServer } = await import("vite");
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
+  async function initDevAndListening() {
+    if (process.env.NODE_ENV !== "production") {
+      const { createServer: createViteServer } = await import("vite");
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } else {
+      const distPath = path.join(process.cwd(), "dist");
+      app.use(express.static(distPath));
+      app.get("*", (req, res) => {
+        res.sendFile(path.join(distPath, "index.html"));
+      });
+    }
+
+    if (!process.env.VERCEL) {
+      const PORT = 3000;
+      app.listen(PORT, "0.0.0.0", () => {
+        console.log(`Server running on http://localhost:${PORT}`);
+      });
+    }
   }
 
-  if (!process.env.VERCEL) {
-    app.listen(PORT, "0.0.0.0", () => {
-      console.log(`Server running on http://localhost:${PORT}`);
-    });
-  }
-}
-
-startServer();
+  initDevAndListening();
