@@ -757,8 +757,9 @@ function getFallbackProfileAudit(profileUrl: string) {
   };
 }
 
+export const app = express();
+
 async function startServer() {
-  const app = express();
   const PORT = 3000;
 
   // Use JSON body parser with comfortable limit for writing samples
@@ -1961,9 +1962,11 @@ Do not include any wrapping markdown markdown code-blocks like \`\`\`json. Retur
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
+  if (!process.env.VERCEL) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
+  }
 }
 
 startServer();
