@@ -3,7 +3,6 @@ import path from "path";
 import dotenv from "dotenv";
 import fs from "fs";
 import { GoogleGenAI, Type } from "@google/genai";
-import { createServer as createViteServer } from "vite";
 import { createRequire } from "module";
 import nodemailer from "nodemailer";
 
@@ -1949,6 +1948,7 @@ Do not include any wrapping markdown markdown code-blocks like \`\`\`json. Retur
 
   // Serve static files / Vite middleware
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
