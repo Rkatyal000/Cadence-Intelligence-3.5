@@ -5,7 +5,6 @@ import fs from "fs";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createRequire } from "module";
 import nodemailer from "nodemailer";
-
 // @ts-ignore
 const requireFn = typeof require === "function" ? require : createRequire(import.meta.url);
 const pdf = requireFn("pdf-parse");
@@ -84,7 +83,14 @@ interface UserRecord {
 
 const USERS_FILE = path.join(process.cwd(), "users.json");
 
+// Cache users in memory to support read-only serverless platforms like Vercel
+let inMemoryUsers: Record<string, UserRecord> | null = null;
+
 function loadUsers(): Record<string, UserRecord> {
+  if (inMemoryUsers) {
+    return inMemoryUsers;
+  }
+
   const defaultUsers: Record<string, UserRecord> = {
     "rohitkatyal12345@gmail.com": {
       email: "rohitkatyal12345@gmail.com",
@@ -103,6 +109,7 @@ function loadUsers(): Record<string, UserRecord> {
         if (!parsed["rohitkatyal12345@gmail.com"]) {
           parsed["rohitkatyal12345@gmail.com"] = defaultUsers["rohitkatyal12345@gmail.com"];
         }
+        inMemoryUsers = parsed;
         return parsed;
       }
     }
@@ -116,10 +123,12 @@ function loadUsers(): Record<string, UserRecord> {
   } catch (err) {
     console.error("Failed to write initial users file:", err);
   }
+  inMemoryUsers = defaultUsers;
   return defaultUsers;
 }
 
 function saveUsers(users: Record<string, UserRecord>) {
+  inMemoryUsers = users;
   try {
     fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), "utf-8");
   } catch (error) {
