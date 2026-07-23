@@ -5,10 +5,11 @@ import fs from "fs";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createRequire } from "module";
 import nodemailer from "nodemailer";
+import * as pdfModule from "pdf-parse";
+import mammoth from "mammoth";
+
 // @ts-ignore
-const requireFn = typeof require === "function" ? require : createRequire(import.meta.url);
-const pdf = requireFn("pdf-parse");
-const mammoth = requireFn("mammoth");
+const pdf = (pdfModule.default || pdfModule) as any;
 
 // Load environment variables
 dotenv.config();
@@ -81,7 +82,11 @@ interface UserRecord {
   avatar: string;
 }
 
-const USERS_FILE = path.join(process.cwd(), "users.json");
+const USERS_FILE = process.env.VERCEL
+  ? path.join("/tmp", "users.json")
+  : path.join(process.cwd(), "users.json");
+
+const INITIAL_USERS_FILE = path.join(process.cwd(), "users.json");
 
 // Cache users in memory to support read-only serverless platforms like Vercel
 let inMemoryUsers: Record<string, UserRecord> | null = null;
@@ -99,6 +104,20 @@ function loadUsers(): Record<string, UserRecord> {
       avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&h=150&q=80"
     }
   };
+
+  // If we are on Vercel and /tmp/users.json does not exist, try to seed it from initial users.json
+  if (process.env.VERCEL && !fs.existsSync(USERS_FILE)) {
+    try {
+      if (fs.existsSync(INITIAL_USERS_FILE)) {
+        const initialData = fs.readFileSync(INITIAL_USERS_FILE, "utf-8");
+        fs.writeFileSync(USERS_FILE, initialData, "utf-8");
+      } else {
+        fs.writeFileSync(USERS_FILE, JSON.stringify(defaultUsers, null, 2), "utf-8");
+      }
+    } catch (err) {
+      console.error("Vercel: Failed to seed /tmp/users.json:", err);
+    }
+  }
 
   try {
     if (fs.existsSync(USERS_FILE)) {
