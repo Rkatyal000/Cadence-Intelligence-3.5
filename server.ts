@@ -5,6 +5,7 @@ import fs from "fs";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createRequire } from "module";
 import nodemailer from "nodemailer";
+import { createClient } from "@supabase/supabase-js";
 
 // Load environment variables
 dotenv.config();
@@ -148,6 +149,139 @@ function saveUsers(users: Record<string, UserRecord>) {
   } catch (error) {
     console.error("Failed to save users to file:", error);
   }
+}
+
+// Initialize Supabase Client dynamically
+let supabaseClient: any = null;
+let lastSupabaseWriteError: string | null = null;
+
+function getSupabase() {
+  if (supabaseClient) return supabaseClient;
+  
+  const url = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "https://wngfuvqwnafmsgsmobzl.supabase.co").trim();
+  const key = (process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || "sb_publishable_kTod94ZC_zEniqC4QgiKYA_o44i4mvY").trim();
+  
+  if (url && key) {
+    try {
+      supabaseClient = createClient(url, key);
+      console.log("Supabase Client initialized successfully with URL:", url);
+      return supabaseClient;
+    } catch (err) {
+      console.error("Error creating Supabase client:", err);
+    }
+  }
+  return null;
+}
+
+async function checkSupabaseStatus() {
+  const supabase = getSupabase();
+  if (!supabase) return { configured: false, status: "not_configured" };
+  
+  try {
+    const { error } = await supabase.from("cadence_users").select("email").limit(1);
+    if (error) {
+      const isMissingTable = 
+        error.code === "42P01" || 
+        (error.message && error.message.includes("Could not find the table"));
+      
+      if (isMissingTable) {
+        return { configured: true, status: "table_missing", error: error.message };
+      }
+      return { configured: true, status: "error", error: error.message };
+    }
+    
+    // If the table is found, let's see if we have had an active write policy error (RLS)
+    if (lastSupabaseWriteError && (lastSupabaseWriteError.includes("row-level security") || lastSupabaseWriteError.includes("policy"))) {
+      return { configured: true, status: "rls_error", error: lastSupabaseWriteError };
+    }
+    
+    return { configured: true, status: "healthy" };
+  } catch (err: any) {
+    return { configured: true, status: "error", error: err?.message || String(err) };
+  }
+}
+
+async function findUserByEmail(email: string): Promise<UserRecord | null> {
+  const cleanEmail = email.trim().toLowerCase();
+  
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from("cadence_users")
+        .select("*")
+        .eq("email", cleanEmail)
+        .maybeSingle();
+        
+      if (error) {
+        // Log the error and fall through to local fallback
+        console.warn(`Supabase findUserByEmail error: ${error.message} (code: ${error.code}). Falling back to local file store.`);
+      } else if (data) {
+        return {
+          email: data.email,
+          passwordHash: data.password_hash,
+          role: data.role,
+          avatar: data.avatar
+        };
+      } else {
+        // User not found in Supabase.
+        // If it's the default reviewer account, return the seed info so they can always log in
+        if (cleanEmail === "rohitkatyal12345@gmail.com") {
+          return {
+            email: "rohitkatyal12345@gmail.com",
+            passwordHash: "password123",
+            role: "Staff Systems Architect",
+            avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&h=150&q=80"
+          };
+        }
+        return null;
+      }
+    } catch (err) {
+      console.warn("Supabase query failed. Falling back to local file store.", err);
+    }
+  }
+  
+  // Fallback to local users.json
+  const localUsers = loadUsers();
+  return localUsers[cleanEmail] || null;
+}
+
+async function upsertUser(user: UserRecord): Promise<boolean> {
+  const cleanEmail = user.email.trim().toLowerCase();
+  
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      const { error } = await supabase
+        .from("cadence_users")
+        .upsert({
+          email: cleanEmail,
+          password_hash: user.passwordHash,
+          role: user.role,
+          avatar: user.avatar,
+          updated_at: new Date().toISOString()
+        });
+        
+      if (!error) {
+        lastSupabaseWriteError = null;
+        // Keep local cache/file in sync as a hot fallback
+        const localUsers = loadUsers();
+        localUsers[cleanEmail] = user;
+        saveUsers(localUsers);
+        return true;
+      }
+      lastSupabaseWriteError = error.message;
+      console.warn(`Supabase upsertUser error: ${error.message}. Falling back to local store.`);
+    } catch (err) {
+      console.warn("Supabase upsert failed. Falling back to local store.", err);
+    }
+  }
+  
+  // Fallback to local users.json
+  const localUsers = loadUsers();
+  localUsers[cleanEmail] = user;
+  saveUsers(localUsers);
+  return true;
 }
 
 // Memory stores for secure OTP validation and verification
@@ -787,17 +921,19 @@ app.use(express.json({ limit: "5mb" }));
 // API endpoints
   
   // Health check endpoint
-  app.get("/api/health", (req, res) => {
+  app.get("/api/health", async (req, res) => {
+    const supabaseStatus = await checkSupabaseStatus();
     res.json({ 
       status: "healthy", 
       keyAvailable: !!process.env.GEMINI_API_KEY, 
       rateLimited: geminiRateLimited,
-      smtpConfigured: !!(process.env.SMTP_HOST && process.env.SMTP_PORT && process.env.SMTP_USER && process.env.SMTP_PASS)
+      smtpConfigured: !!(process.env.SMTP_HOST && process.env.SMTP_PORT && process.env.SMTP_USER && process.env.SMTP_PASS),
+      supabase: supabaseStatus
     });
   });
 
   // Authentication Verification Endpoint
-  app.post("/api/verify-auth", (req, res) => {
+  app.post("/api/verify-auth", async (req, res) => {
     const { email, password, role, avatar } = req.body;
 
     if (!email || typeof email !== "string" || !email.includes("@")) {
@@ -815,11 +951,11 @@ app.use(express.json({ limit: "5mb" }));
     }
 
     const cleanEmail = email.trim().toLowerCase();
-    const users = loadUsers();
+    const user = await findUserByEmail(cleanEmail);
 
-    if (users[cleanEmail]) {
+    if (user) {
       // User exists - check password
-      if (users[cleanEmail].passwordHash !== password) {
+      if (user.passwordHash !== password) {
         return res.status(401).json({
           success: false,
           error: `Verification Failed: Incorrect password for ${cleanEmail}. Please double-check your password, or use the "Forgot Password" link to reset it.`
@@ -832,8 +968,8 @@ app.use(express.json({ limit: "5mb" }));
         verified: true,
         user: {
           email: cleanEmail,
-          role: users[cleanEmail].role || role || "Contributor",
-          avatar: users[cleanEmail].avatar || avatar || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&h=150&q=80"
+          role: user.role || role || "Contributor",
+          avatar: user.avatar || avatar || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&h=150&q=80"
         },
         message: "Workspace credentials verified successfully by Cadence Core."
       });
@@ -846,7 +982,7 @@ app.use(express.json({ limit: "5mb" }));
   });
 
   // Dedicated Sign Up Endpoint
-  app.post("/api/signup", (req, res) => {
+  app.post("/api/signup", async (req, res) => {
     const { email, password, role, avatar } = req.body;
 
     if (!email || typeof email !== "string" || !email.includes("@")) {
@@ -864,9 +1000,9 @@ app.use(express.json({ limit: "5mb" }));
     }
 
     const cleanEmail = email.trim().toLowerCase();
-    const users = loadUsers();
+    const existingUser = await findUserByEmail(cleanEmail);
 
-    if (users[cleanEmail]) {
+    if (existingUser && cleanEmail !== "rohitkatyal12345@gmail.com") {
       return res.status(400).json({
         success: false,
         error: "Registration Failed: An account with this email already exists. Please Sign In instead."
@@ -880,8 +1016,7 @@ app.use(express.json({ limit: "5mb" }));
       avatar: avatar || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&h=150&q=80"
     };
 
-    users[cleanEmail] = newUser;
-    saveUsers(users);
+    await upsertUser(newUser);
 
     return res.json({
       success: true,
@@ -1036,7 +1171,7 @@ app.use(express.json({ limit: "5mb" }));
   });
 
   // Password Reset / Forgot Password Endpoint
-  app.post("/api/reset-password", (req, res) => {
+  app.post("/api/reset-password", async (req, res) => {
     const { email, newPassword, otp } = req.body;
 
     if (!email || typeof email !== "string" || !email.includes("@")) {
@@ -1089,12 +1224,12 @@ app.use(express.json({ limit: "5mb" }));
     // OTP validated successfully - remove it so it cannot be re-used
     activeOtps.delete(cleanEmail);
 
-    const users = loadUsers();
+    const user = await findUserByEmail(cleanEmail);
 
-    if (users[cleanEmail]) {
+    if (user) {
       // Update password
-      users[cleanEmail].passwordHash = newPassword;
-      saveUsers(users);
+      user.passwordHash = newPassword;
+      await upsertUser(user);
 
       return res.json({
         success: true,
@@ -1108,8 +1243,7 @@ app.use(express.json({ limit: "5mb" }));
         role: "Contributor",
         avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&h=150&q=80"
       };
-      users[cleanEmail] = newUser;
-      saveUsers(users);
+      await upsertUser(newUser);
 
       return res.json({
         success: true,

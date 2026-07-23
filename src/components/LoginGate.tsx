@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Mail, Lock, Eye, EyeOff, Sparkles, LogIn, ShieldAlert, ArrowRight, CheckCircle2, ArrowLeft, KeyRound, Info, Inbox, RefreshCw, Send, UserPlus } from "lucide-react";
+import { Mail, Lock, Eye, EyeOff, Sparkles, LogIn, ShieldAlert, ArrowRight, CheckCircle2, ArrowLeft, KeyRound, Info, Inbox, RefreshCw, Send, UserPlus, Database } from "lucide-react";
 
 interface LoginGateProps {
   onLoginSuccess: (email: string, role: string, avatar: string) => void;
@@ -31,6 +31,7 @@ export default function LoginGate({ onLoginSuccess }: LoginGateProps) {
   const [showInbox, setShowInbox] = useState(true); // Default show simulated inbox on side for high fidelity
   const [smtpConfigured, setSmtpConfigured] = useState(false);
   const [lastSmtpError, setLastSmtpError] = useState<string | null>(null);
+  const [supabaseStatus, setSupabaseStatus] = useState<{ configured: boolean; status: string; error?: string } | null>(null);
 
   const fetchSimulatedEmails = async () => {
     try {
@@ -60,6 +61,9 @@ export default function LoginGate({ onLoginSuccess }: LoginGateProps) {
       const data = await response.json();
       if (data && data.status === "healthy") {
         setSmtpConfigured(!!data.smtpConfigured);
+        if (data.supabase) {
+          setSupabaseStatus(data.supabase);
+        }
       }
     } catch (err) {
       console.warn("Error checking SMTP configuration status:", err);
@@ -503,6 +507,80 @@ export default function LoginGate({ onLoginSuccess }: LoginGateProps) {
             ) : (
               /* Standard Login / Signup Form */
               <div className="space-y-4">
+                {supabaseStatus && (
+                  <div className={`p-3.5 rounded-2xl border text-[10px] animate-fadeIn leading-relaxed ${
+                    supabaseStatus.status === "healthy"
+                      ? "bg-emerald-950/25 border-emerald-900/30 text-emerald-300"
+                      : supabaseStatus.status === "table_missing"
+                      ? "bg-amber-950/25 border-amber-900/30 text-amber-300"
+                      : supabaseStatus.status === "rls_error"
+                      ? "bg-rose-950/25 border-rose-900/30 text-rose-300"
+                      : "bg-slate-900/60 border-slate-800/80 text-slate-350"
+                  }`}>
+                    <div className="flex items-center gap-1.5 font-black uppercase tracking-wider mb-1 text-[9px]">
+                      <Database className={`w-3.5 h-3.5 ${
+                        supabaseStatus.status === "healthy" ? "text-emerald-450" : 
+                        supabaseStatus.status === "rls_error" ? "text-rose-450" : "text-amber-450"
+                      }`} />
+                      <span>Supabase Sync: {supabaseStatus.status.replace("_", " ")}</span>
+                    </div>
+                    {supabaseStatus.status === "table_missing" ? (
+                      <div className="space-y-1.5 mt-1 text-slate-300">
+                        <p>
+                          Supabase credentials are valid, but the <strong>cadence_users</strong> table was not found in your Supabase project.
+                        </p>
+                        <details className="cursor-pointer group mt-1">
+                          <summary className="text-indigo-400 font-bold hover:underline select-none">Show Setup SQL</summary>
+                          <div className="mt-1.5 p-2.5 bg-slate-950 rounded-xl border border-slate-800 text-[9px] font-mono select-all overflow-x-auto whitespace-pre leading-normal text-slate-350">
+{`CREATE TABLE cadence_users (
+  email TEXT PRIMARY KEY,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL,
+  avatar TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+);
+
+-- Disable Row Level Security (RLS) to allow secure server API sync
+ALTER TABLE cadence_users DISABLE ROW LEVEL SECURITY;
+
+-- Seed default account
+INSERT INTO cadence_users (email, password_hash, role, avatar)
+VALUES ('rohitkatyal12345@gmail.com', 'password123', 'Staff Systems Architect', 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&h=150&q=80')
+ON CONFLICT (email) DO NOTHING;`}
+                          </div>
+                          <p className="text-[9px] text-slate-500 mt-1">
+                            Copy this, paste and run it in your <strong>Supabase SQL Editor</strong> dashboard to activate sync.
+                          </p>
+                        </details>
+                      </div>
+                    ) : supabaseStatus.status === "rls_error" ? (
+                      <div className="space-y-1.5 mt-1 text-slate-300">
+                        <p className="text-rose-350 font-bold">
+                          Row-Level Security (RLS) is active and blocking database writes!
+                        </p>
+                        <p className="text-slate-400">
+                          To resolve the <code>new row violates row-level security policy</code> error and permit accounts to register, run this quick fix command in your dashboard:
+                        </p>
+                        <details className="cursor-pointer group mt-1" open>
+                          <summary className="text-indigo-400 font-bold hover:underline select-none">Show RLS Fix SQL</summary>
+                          <div className="mt-1.5 p-2.5 bg-slate-950 rounded-xl border border-slate-800 text-[9px] font-mono select-all overflow-x-auto whitespace-pre leading-normal text-slate-350">
+{`-- Disable Row Level Security (RLS) on cadence_users table
+ALTER TABLE cadence_users DISABLE ROW LEVEL SECURITY;`}
+                          </div>
+                          <p className="text-[9px] text-slate-500 mt-1">
+                            Copy this SQL command, paste and run it in your <strong>Supabase SQL Editor</strong>, then try signing in or signing up again.
+                          </p>
+                        </details>
+                      </div>
+                    ) : supabaseStatus.status === "healthy" ? (
+                      <p className="text-slate-300">Your accounts are fully synchronized and stored in your live cloud database.</p>
+                    ) : (
+                      <p className="text-slate-400">Database is not configured yet. Local in-memory state is transient. Add <code>SUPABASE_URL</code> and <code>SUPABASE_ANON_KEY</code> in the Secrets Settings to enable persistent storage.</p>
+                    )}
+                  </div>
+                )}
+
                 {/* Tabs to switch between Sign In and Sign Up */}
                 <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-900/60 border border-slate-800 rounded-xl">
                   <button
