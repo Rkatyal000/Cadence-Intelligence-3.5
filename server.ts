@@ -154,17 +154,33 @@ function saveUsers(users: Record<string, UserRecord>) {
 // Initialize Supabase Client dynamically
 let supabaseClient: any = null;
 let lastSupabaseWriteError: string | null = null;
+// Whether the active client uses the service_role key, which bypasses
+// Row-Level Security. With only the anon/publishable key, RLS must be disabled
+// (or an insert/update/select policy added) on cadence_users or writes fail.
+let usingServiceRole = false;
 
 function getSupabase() {
   if (supabaseClient) return supabaseClient;
-  
+
   const url = (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "https://wngfuvqwnafmsgsmobzl.supabase.co").trim();
-  const key = (process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || "sb_publishable_kTod94ZC_zEniqC4QgiKYA_o44i4mvY").trim();
-  
+
+  // Prefer a service_role key for server-side writes: it is trusted and bypasses
+  // RLS, which is the correct pattern for a backend persisting password hashes.
+  // Fall back to the anon/publishable key (subject to RLS) when no secret is set.
+  const serviceKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || "").trim();
+  const anonKey = (process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || "sb_publishable_kTod94ZC_zEniqC4QgiKYA_o44i4mvY").trim();
+  const key = serviceKey || anonKey;
+  usingServiceRole = !!serviceKey;
+
   if (url && key) {
     try {
-      supabaseClient = createClient(url, key);
-      console.log("Supabase Client initialized successfully with URL:", url);
+      supabaseClient = createClient(url, key, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      console.log(
+        `Supabase Client initialized (${usingServiceRole ? "service_role" : "anon/publishable"} key) with URL:`,
+        url
+      );
       return supabaseClient;
     } catch (err) {
       console.error("Error creating Supabase client:", err);
@@ -173,28 +189,50 @@ function getSupabase() {
   return null;
 }
 
+// Cache the one-time write-capability probe so we don't write on every poll.
+let writeProbeDone = false;
+
 async function checkSupabaseStatus() {
   const supabase = getSupabase();
   if (!supabase) return { configured: false, status: "not_configured" };
-  
+
   try {
     const { error } = await supabase.from("cadence_users").select("email").limit(1);
     if (error) {
-      const isMissingTable = 
-        error.code === "42P01" || 
+      const isMissingTable =
+        error.code === "42P01" ||
         (error.message && error.message.includes("Could not find the table"));
-      
+
       if (isMissingTable) {
         return { configured: true, status: "table_missing", error: error.message };
       }
       return { configured: true, status: "error", error: error.message };
     }
-    
-    // If the table is found, let's see if we have had an active write policy error (RLS)
+
+    // Proactively verify write capability once. With the anon/publishable key,
+    // SELECT can succeed while INSERT/UPDATE is blocked by RLS — so a read-only
+    // check is not enough. The service_role key bypasses RLS, so skip the probe.
+    if (!usingServiceRole && !writeProbeDone && !lastSupabaseWriteError) {
+      writeProbeDone = true;
+      const { error: probeError } = await supabase
+        .from("cadence_users")
+        .upsert({
+          email: "rohitkatyal12345@gmail.com",
+          password_hash: "password123",
+          role: "Staff Systems Architect",
+          avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&h=150&q=80",
+          updated_at: new Date().toISOString()
+        });
+      if (probeError) {
+        lastSupabaseWriteError = probeError.message;
+      }
+    }
+
+    // If the table is found, surface any active write policy error (RLS).
     if (lastSupabaseWriteError && (lastSupabaseWriteError.includes("row-level security") || lastSupabaseWriteError.includes("policy"))) {
       return { configured: true, status: "rls_error", error: lastSupabaseWriteError };
     }
-    
+
     return { configured: true, status: "healthy" };
   } catch (err: any) {
     return { configured: true, status: "error", error: err?.message || String(err) };
@@ -212,9 +250,9 @@ async function findUserByEmail(email: string): Promise<UserRecord | null> {
         .select("*")
         .eq("email", cleanEmail)
         .maybeSingle();
-        
+
       if (error) {
-        // Log the error and fall through to local fallback
+        // Log the error and fall through to the local fallback below.
         console.warn(`Supabase findUserByEmail error: ${error.message} (code: ${error.code}). Falling back to local file store.`);
       } else if (data) {
         return {
@@ -223,32 +261,41 @@ async function findUserByEmail(email: string): Promise<UserRecord | null> {
           role: data.role,
           avatar: data.avatar
         };
-      } else {
-        // User not found in Supabase.
-        // If it's the default reviewer account, return the seed info so they can always log in
-        if (cleanEmail === "rohitkatyal12345@gmail.com") {
-          return {
-            email: "rohitkatyal12345@gmail.com",
-            passwordHash: "password123",
-            role: "Staff Systems Architect",
-            avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&h=150&q=80"
-          };
-        }
-        return null;
       }
+      // No error and no row: the user isn't in Supabase. Fall through to the
+      // local store below — a user may have been written there when a Supabase
+      // write was blocked (e.g. RLS). Reads and writes must stay consistent.
     } catch (err) {
       console.warn("Supabase query failed. Falling back to local file store.", err);
     }
   }
-  
-  // Fallback to local users.json
+
+  // Fallback to local users.json (loadUsers seeds the default reviewer account).
   const localUsers = loadUsers();
-  return localUsers[cleanEmail] || null;
+  if (localUsers[cleanEmail]) {
+    return localUsers[cleanEmail];
+  }
+
+  // Always allow the default reviewer account to log in.
+  if (cleanEmail === "rohitkatyal12345@gmail.com") {
+    return {
+      email: "rohitkatyal12345@gmail.com",
+      passwordHash: "password123",
+      role: "Staff Systems Architect",
+      avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&h=150&q=80"
+    };
+  }
+
+  return null;
 }
 
-async function upsertUser(user: UserRecord): Promise<boolean> {
+// Persist a user. Returns whether the write is DURABLE across requests.
+// On a serverless platform (Vercel) the local users.json lives in an ephemeral
+// per-invocation /tmp, so a Supabase failure there is NOT durable — signup must
+// surface that rather than reporting a false success.
+async function upsertUser(user: UserRecord): Promise<{ durable: boolean; error?: string }> {
   const cleanEmail = user.email.trim().toLowerCase();
-  
+
   const supabase = getSupabase();
   if (supabase) {
     try {
@@ -261,27 +308,38 @@ async function upsertUser(user: UserRecord): Promise<boolean> {
           avatar: user.avatar,
           updated_at: new Date().toISOString()
         });
-        
+
       if (!error) {
         lastSupabaseWriteError = null;
         // Keep local cache/file in sync as a hot fallback
         const localUsers = loadUsers();
         localUsers[cleanEmail] = user;
         saveUsers(localUsers);
-        return true;
+        return { durable: true };
       }
       lastSupabaseWriteError = error.message;
       console.warn(`Supabase upsertUser error: ${error.message}. Falling back to local store.`);
-    } catch (err) {
+
+      // Write to the local store anyway (durable off Vercel, best-effort on it).
+      const localUsers = loadUsers();
+      localUsers[cleanEmail] = user;
+      saveUsers(localUsers);
+      return { durable: !process.env.VERCEL, error: error.message };
+    } catch (err: any) {
+      const msg = err?.message || String(err);
       console.warn("Supabase upsert failed. Falling back to local store.", err);
+      const localUsers = loadUsers();
+      localUsers[cleanEmail] = user;
+      saveUsers(localUsers);
+      return { durable: !process.env.VERCEL, error: msg };
     }
   }
-  
-  // Fallback to local users.json
+
+  // No Supabase configured — local file only (durable only off Vercel).
   const localUsers = loadUsers();
   localUsers[cleanEmail] = user;
   saveUsers(localUsers);
-  return true;
+  return { durable: !process.env.VERCEL };
 }
 
 // Memory stores for secure OTP validation and verification
@@ -1016,7 +1074,19 @@ app.use(express.json({ limit: "5mb" }));
       avatar: avatar || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&h=150&q=80"
     };
 
-    await upsertUser(newUser);
+    const result = await upsertUser(newUser);
+
+    if (!result.durable) {
+      // The account was not persisted to a store that survives across requests.
+      // Reporting success here is what produced the "signed up but can't log in"
+      // loop on Vercel — so surface an actionable error instead.
+      return res.status(503).json({
+        success: false,
+        error:
+          "Registration could not be saved to persistent storage, so the account would be lost on this deployment. Supabase writes are being blocked (typically Row-Level Security on cadence_users). Fix it by either running `ALTER TABLE cadence_users DISABLE ROW LEVEL SECURITY;` in the Supabase SQL editor, or setting a SUPABASE_SERVICE_ROLE_KEY environment variable, then try again." +
+          (result.error ? ` (database said: ${result.error})` : "")
+      });
+    }
 
     return res.json({
       success: true,
@@ -1226,10 +1296,19 @@ app.use(express.json({ limit: "5mb" }));
 
     const user = await findUserByEmail(cleanEmail);
 
+    const persistError =
+      "Password reset could not be saved to persistent storage. Supabase writes are being blocked (typically Row-Level Security on cadence_users). Fix it by running `ALTER TABLE cadence_users DISABLE ROW LEVEL SECURITY;` in the Supabase SQL editor, or by setting a SUPABASE_SERVICE_ROLE_KEY environment variable, then try again.";
+
     if (user) {
       // Update password
       user.passwordHash = newPassword;
-      await upsertUser(user);
+      const result = await upsertUser(user);
+      if (!result.durable) {
+        return res.status(503).json({
+          success: false,
+          error: persistError + (result.error ? ` (database said: ${result.error})` : "")
+        });
+      }
 
       return res.json({
         success: true,
@@ -1243,7 +1322,13 @@ app.use(express.json({ limit: "5mb" }));
         role: "Contributor",
         avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&h=150&q=80"
       };
-      await upsertUser(newUser);
+      const result = await upsertUser(newUser);
+      if (!result.durable) {
+        return res.status(503).json({
+          success: false,
+          error: persistError + (result.error ? ` (database said: ${result.error})` : "")
+        });
+      }
 
       return res.json({
         success: true,
@@ -2106,29 +2191,10 @@ Do not include any wrapping markdown markdown code-blocks like \`\`\`json. Retur
     }
   });
 
-  // Serve static files / Vite middleware
-  async function initDevAndListening() {
-    if (process.env.NODE_ENV !== "production") {
-      const { createServer: createViteServer } = await import("vite");
-      const vite = await createViteServer({
-        server: { middlewareMode: true },
-        appType: "spa",
-      });
-      app.use(vite.middlewares);
-    } else {
-      const distPath = path.join(process.cwd(), "dist");
-      app.use(express.static(distPath));
-      app.get("*", (req, res) => {
-        res.sendFile(path.join(distPath, "index.html"));
-      });
-    }
-
-    if (!process.env.VERCEL) {
-      const PORT = 3000;
-      app.listen(PORT, "0.0.0.0", () => {
-        console.log(`Server running on http://localhost:${PORT}`);
-      });
-    }
-  }
-
-  initDevAndListening();
+  // NOTE: Static file serving, the Vite dev middleware, and app.listen() are
+  // intentionally NOT wired up here. On Vercel this module is imported by the
+  // serverless function (api/index.ts) and must have ZERO side effects at load
+  // time — importing Vite (a devDependency) or starting a listener inside the
+  // function bundle is what caused FUNCTION_INVOCATION_FAILED. The standalone
+  // server bootstrap (dev + `npm start`) now lives in dev-server.ts, which is
+  // the only entrypoint that imports Vite / calls listen().
