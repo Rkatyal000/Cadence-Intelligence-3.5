@@ -5,11 +5,6 @@ import fs from "fs";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createRequire } from "module";
 import nodemailer from "nodemailer";
-import * as pdfModule from "pdf-parse";
-import mammoth from "mammoth";
-
-// @ts-ignore
-const pdf = (pdfModule.default || pdfModule) as any;
 
 // Load environment variables
 dotenv.config();
@@ -1766,9 +1761,13 @@ Return the audit report as a structured JSON conforming exactly to the requested
       const isDocx = lowerName.endsWith(".docx") || fileType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || fileType === "application/vnd.ms-word";
       const isPdf = lowerName.endsWith(".pdf") || fileType === "application/pdf";
 
+      const requireFn = typeof require === "function" ? require : createRequire(import.meta.url);
+
       if (isPdf) {
         try {
-          const parsed = await pdf(buffer);
+          const pdfModule = requireFn("pdf-parse");
+          const pdfParser = (pdfModule.default || pdfModule) as any;
+          const parsed = await pdfParser(buffer);
           text = parsed.text || "";
         } catch (pdfErr: any) {
           console.error("PDF parse error:", pdfErr);
@@ -1776,7 +1775,9 @@ Return the audit report as a structured JSON conforming exactly to the requested
         }
       } else if (isDocx) {
         try {
-          const parsed = await mammoth.extractRawText({ buffer });
+          const mammothModule = requireFn("mammoth");
+          const mammothParser = (mammothModule.default || mammothModule) as any;
+          const parsed = await mammothParser.extractRawText({ buffer });
           text = parsed.value || "";
         } catch (docxErr: any) {
           console.error("DOCX parse error:", docxErr);
