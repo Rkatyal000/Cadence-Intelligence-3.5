@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { Analytics } from "@vercel/analytics/react";
 import OnboardingWizard from "./components/OnboardingWizard";
 import PipelineDashboard from "./components/PipelineDashboard";
 import StoryBank from "./components/StoryBank";
@@ -544,6 +545,7 @@ Business alignment gets you in the boardroom.`
           </div>
         </div>
       )}
+      <Analytics />
     </div>
   );
 }
