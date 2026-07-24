@@ -8,7 +8,10 @@ let appPromise: Promise<any> | null = null;
 
 async function getApp() {
   if (!appPromise) {
-    appPromise = import("../server").then((m) => m.app);
+    // Explicit .js extension is required: the project is ESM, and on Vercel
+    // server.ts is compiled to /var/task/server.js. Node's ESM resolver does
+    // not add extensions, so "../server" fails with ERR_MODULE_NOT_FOUND.
+    appPromise = import("../server.js").then((m) => m.app);
   }
   return appPromise;
 }
